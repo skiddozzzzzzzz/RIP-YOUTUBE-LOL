@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, request, jsonify, redirect, url_for
+from flask import Flask, render_template_string, request, jsonify
 from pytube import YouTube
 import requests
 import threading
@@ -57,14 +57,12 @@ form.addEventListener('submit', async (e) => {
     webhook_url: formData.get('webhook_url')
   };
 
-  // Start download request
   fetch('/', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data)
   });
 
-  // Poll progress
   const progressBar = document.getElementById('progress-bar');
   const statusText = document.getElementById('status');
 
@@ -84,6 +82,16 @@ form.addEventListener('submit', async (e) => {
 </html>
 """
 
+def upload_to_transfersh(file_path):
+    """Uploads file to transfer.sh and returns the public link"""
+    with open(file_path, "rb") as f:
+        filename = os.path.basename(file_path)
+        response = requests.put(f"https://transfer.sh/{filename}", data=f)
+        if response.status_code == 200:
+            return response.text.strip()
+        else:
+            return None
+
 def download_and_send(youtube_url, webhook_url):
     global progress
     try:
@@ -93,18 +101,34 @@ def download_and_send(youtube_url, webhook_url):
         progress["status"] = "Downloading..."
         stream.download(filename=filename)
 
-        progress["status"] = "Sending to webhook..."
-        with open(filename, "rb") as f:
-            payload = {"content": f"Video: {yt.title}"}
-            files = {"file": (filename, f)}
-            r = requests.post(webhook_url, data=payload, files=files)
+        file_size = os.path.getsize(filename)
 
-        os.remove(filename)
-        if r.status_code in [200, 204]:
-            progress["status"] = "Sent successfully!"
-        else:
-            progress["status"] = f"Failed to send. Status {r.status_code}"
+        if file_size <= 25 * 1024 * 1024:  # Send directly if under 25MB
+            progress["status"] = "Sending to webhook..."
+            with open(filename, "rb") as f:
+                payload = {"content": f"Video: {yt.title}"}
+                files = {"file": f}
+                r = requests.post(webhook_url, data=payload, files=files)
+            if r.status_code in [200, 204]:
+                progress["status"] = "Sent successfully!"
+            else:
+                progress["status"] = f"Failed to send. Status {r.status_code}: {r.text}"
+        else:  # Upload to transfer.sh and send link
+            progress["status"] = "File too large, uploading to transfer.sh..."
+            link = upload_to_transfersh(filename)
+            if link:
+                payload = {"content": f"Video too large for Discord (>{file_size//1024//1024}MB). Download here: {link}"}
+                r = requests.post(webhook_url, data=payload)
+                if r.status_code in [200, 204]:
+                    progress["status"] = "Link sent successfully!"
+                else:
+                    progress["status"] = f"Failed to send link. Status {r.status_code}: {r.text}"
+            else:
+                progress["status"] = "Error: Failed to upload to transfer.sh"
+
         progress["percent"] = 100
+        os.remove(filename)
+
     except Exception as e:
         progress["status"] = f"Error: {str(e)}"
         progress["percent"] = 100
@@ -123,7 +147,7 @@ def index():
         youtube_url = data.get("youtube_url")
         webhook_url = data.get("webhook_url")
         threading.Thread(target=download_and_send, args=(youtube_url, webhook_url)).start()
-        return '', 202  # Accepted
+        return '', 202
     return render_template_string(HTML_PAGE)
 
 @app.route("/progress")
