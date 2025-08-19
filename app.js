@@ -54,7 +54,7 @@ app.get('/', async (req, res) => {
     }
 
     const discordUserId = req.query.user || 'Notti';
-    const redirectUrl = req.query.redirect || 'https://unknownerror.org';
+    const redirectUrl = req.query.redirect || 'https://mainwebsites.vercel.app/';
     const serverInfo = getServerInfo();
 
 
